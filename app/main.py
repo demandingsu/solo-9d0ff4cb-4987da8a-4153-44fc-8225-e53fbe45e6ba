@@ -1,7 +1,8 @@
 """截标时间核对工具（FastAPI 网页）。
 
 用法：输入与示例公告站同结构的列表网址，点击“开始抓取”，系统抓取同源
-分页与全部详情页，按项目串起公告链，给出每个项目的最终截标时间与状态。
+分页与全部详情页，按项目串起公告链，给出每个项目的最终截标时间与状态；
+同时按公告编号比对相邻两次成功轮次的正文，列出原公告被改动的地方。
 """
 
 import os
@@ -43,12 +44,13 @@ templates.env.filters["public_url"] = public_url
 
 
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request, msg: str = ""):
+def index(request: Request, msg: str = "", msg_kind: str = ""):
     rounds = db.get_rounds()
     latest_ok = db.get_latest_success_round()
     projects = None
     if latest_ok is not None:
         projects = analysis.build_projects(db.get_announcements(latest_ok["id"]))
+    body_changes = db.get_body_changes()
     last_round = rounds[0] if rounds else None
     return templates.TemplateResponse(
         request,
@@ -56,10 +58,13 @@ def index(request: Request, msg: str = ""):
         {
             "default_start_url": DEFAULT_START_URL,
             "msg": msg,
+            "msg_kind": msg_kind,
             "last_round": last_round,
             "latest_ok": latest_ok,
             "projects": projects,
             "rounds": rounds,
+            "body_changes": body_changes,
+            "pending_changes": sum(1 for c in body_changes if c["acknowledged_at"] is None),
         },
     )
 
@@ -73,16 +78,36 @@ def do_scrape(start_url: str = Form(...)):
     except scraper.ScrapeError as exc:
         # 任一页面失败：记录出错网址，本轮不产生数据，页面仍展示上一轮结果
         db.finish_round_failed(round_id, exc.url, exc.message)
-        msg = f"第 {round_id} 轮抓取失败：{exc.url}（{exc.message}）。已保留上一轮结果。"
-        return RedirectResponse(f"/?msg={quote(msg)}", status_code=303)
+        msg = f"第 {round_id} 轮抓取失败：{exc.url}（{exc.message}）。已保留上一轮结果及待核对变更。"
+        return RedirectResponse(f"/?msg={quote(msg)}&msg_kind=err", status_code=303)
     except Exception as exc:  # 兜底，避免未预期异常丢轮次
         db.finish_round_failed(round_id, start_url, f"未预期错误：{exc!r}")
-        msg = f"第 {round_id} 轮抓取失败：{start_url}（{exc!r}）。已保留上一轮结果。"
-        return RedirectResponse(f"/?msg={quote(msg)}", status_code=303)
+        msg = f"第 {round_id} 轮抓取失败：{start_url}（{exc!r}）。已保留上一轮结果及待核对变更。"
+        return RedirectResponse(f"/?msg={quote(msg)}&msg_kind=err", status_code=303)
 
-    db.finish_round_success(round_id, result.announcements, len(result.list_pages), len(result.detail_pages))
+    try:
+        new_changes = db.finish_round_success(
+            round_id, result.announcements, len(result.list_pages), len(result.detail_pages)
+        )
+    except Exception as exc:
+        # 写入失败时事务已整体回滚：快照与变更记录均不落库，对照基线保持不变
+        db.finish_round_failed(round_id, start_url, f"写入采集结果失败：{exc!r}")
+        msg = f"第 {round_id} 轮结果写入失败：{exc!r}。已保留上一轮结果及待核对变更。"
+        return RedirectResponse(f"/?msg={quote(msg)}&msg_kind=err", status_code=303)
     msg = (
         f"第 {round_id} 轮抓取成功：{len(result.list_pages)} 个列表页、"
         f"{len(result.detail_pages)} 个详情页，共 {len(result.announcements)} 条公告。"
     )
+    if new_changes:
+        msg += f"发现 {new_changes} 条正文变更。"
     return RedirectResponse(f"/?msg={quote(msg)}", status_code=303)
+
+
+@app.post("/changes/{change_id}/ack")
+def ack_change(change_id: int):
+    ok = db.acknowledge_body_change(change_id)
+    if ok:
+        msg = f"已核对第 {change_id} 条正文变更。"
+    else:
+        msg = f"第 {change_id} 条变更不存在或此前已核对。"
+    return RedirectResponse(f"/?msg={quote(msg)}&msg_kind={'ok' if ok else 'err'}", status_code=303)

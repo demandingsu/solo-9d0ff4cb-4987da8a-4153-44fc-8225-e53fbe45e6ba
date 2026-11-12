@@ -11,6 +11,7 @@
     ul.notice-list a { color: #2c5f8a; text-decoration: none; }
     ul.notice-list a:hover { text-decoration: underline; }
     .pub { color: #888; font-size: .9em; margin-left: 1em; }
+    .changed { color: #b8860b; font-size: .85em; margin-left: .6em; }
     nav.pagination { margin: 1.2em 0; }
     nav.pagination a, nav.pagination span.current { margin-right: .6em; padding: .2em .5em; }
     nav.pagination span.current { background: #2c5f8a; color: #fff; border-radius: 3px; }
@@ -24,6 +25,7 @@
     <li>
       <a href="/detail/{{ a.notice_no }}.html">【{{ a.type_label }}】{{ a.title }}（{{ a.notice_no }}）</a>
       <span class="pub">{{ a.publish_time }}</span>
+      {% if a.changed %}<span class="changed">正文已切换（第 {{ a.body_version + 1 }} 版）</span>{% endif %}
     </li>
     {% endfor %}
   </ul>

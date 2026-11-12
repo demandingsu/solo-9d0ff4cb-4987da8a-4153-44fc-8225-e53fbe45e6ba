@@ -3,7 +3,10 @@
 解析约定（与示例公告站页面结构一致）：
 - 列表页：公告链接 ul.notice-list a[href]；分页导航 nav.pagination a[href]
 - 详情页：div.notice[data-notice-type]，字段 #project-no / #notice-no /
-  #publish-time / #deadline / #target-notice
+  #publish-time / #deadline / #target-notice，正文 div.notice-body
+
+正文取 .notice-body 的可见文字，并把连续空白合并为单个空格、去掉首尾
+空白后再保存；这样只有真正的文字改动才会被识别为“正文变更”。
 
 只跟随与起始列表网址同源的链接；任何一页抓取或解析失败都抛出
 ScrapeError（携带出错网址），由上层决定保留上一轮结果。
@@ -51,6 +54,7 @@ class Announcement:
     target_notice_no: str | None
     title: str
     url: str
+    body: str = ""  # .notice-body 可见文字，空白已合并
 
     @property
     def type_label(self) -> str:
@@ -107,6 +111,55 @@ def _text(node, selector: str) -> str | None:
     return el.get_text(strip=True) if el else None
 
 
+# 抓取正文时跳过不可见元素：脚本/样式，以及 hidden、display:none、visibility:hidden
+_HIDDEN_TAGS = {"script", "style", "template"}
+
+# 块级元素在浏览器里另起一行；提取时在其两侧补空白，避免把相邻段落粘成一个词
+_BLOCK_TAGS = {
+    "p", "div", "section", "article", "header", "footer", "main", "aside", "nav",
+    "ul", "ol", "li", "dl", "dt", "dd", "table", "tr", "td", "th", "thead", "tbody",
+    "blockquote", "pre", "form", "fieldset", "figure", "figcaption",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hr", "address",
+}
+
+
+def _is_hidden(el) -> bool:
+    if el.name in _HIDDEN_TAGS:
+        return True
+    if el.has_attr("hidden"):
+        return True
+    style = (el.get("style") or "").replace(" ", "").lower()
+    return "display:none" in style or "visibility:hidden" in style
+
+
+def _visible_text(node) -> str:
+    """收集节点下可见文字，按文档顺序拼接；跳过不可见元素，块级元素补空白。"""
+    parts: list[str] = []
+    for child in node.children:
+        if isinstance(child, str):
+            parts.append(str(child))
+        elif child.name is not None and not _is_hidden(child):
+            if child.name == "br":
+                parts.append(" ")
+            elif child.name in _BLOCK_TAGS:
+                parts.extend((" ", _visible_text(child), " "))
+            else:
+                parts.append(_visible_text(child))
+    return "".join(parts)
+
+
+def normalize_ws(text: str) -> str:
+    """合并连续空白为单个空格并去掉首尾空白（用于正文比较）。"""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def extract_body(root) -> str:
+    el = root.select_one(".notice-body")
+    if el is None or _is_hidden(el):
+        return ""
+    return normalize_ws(_visible_text(el))
+
+
 def parse_detail(html: str, url: str) -> Announcement:
     """解析单个详情页 HTML（独立出来便于测试）。"""
     soup = BeautifulSoup(html, "html.parser")
@@ -143,6 +196,7 @@ def parse_detail(html: str, url: str) -> Announcement:
         target_notice_no=target,
         title=title_el.get_text(strip=True) if title_el else notice_no,
         url=url,
+        body=extract_body(root),
     )
 
 

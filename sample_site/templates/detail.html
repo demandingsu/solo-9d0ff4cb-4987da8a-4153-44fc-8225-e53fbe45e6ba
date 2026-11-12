@@ -10,6 +10,7 @@
     dl.notice-fields dt { font-weight: bold; color: #555; }
     dl.notice-fields dd { margin: 0; }
     .notice-body { margin: 1.5em 0; line-height: 1.8; }
+    .admin-hint { color: #888; font-size: .85em; border-top: 1px dashed #ddd; padding-top: .6em; }
   </style>
 </head>
 <body>
@@ -24,6 +25,12 @@
       {% if a.target %}<dt>所指公告</dt><dd id="target-notice"><a href="/detail/{{ a.target }}.html">{{ a.target }}</a></dd>{% endif %}
     </dl>
     <div class="notice-body">{{ a.body }}</div>
+    {% if has_variants %}
+    <p class="admin-hint">示例站正文控制：当前第 {{ body_version + 1 }} 版。
+      <a href="/admin/body?notice={{ a.notice_no }}">切到下一版</a>
+      · <a href="/admin/body?notice={{ a.notice_no }}&amp;reset=1">恢复原始正文</a>
+    </p>
+    {% endif %}
     <p><a href="/list.html?page=1">返回列表</a></p>
   </div>
 </body>

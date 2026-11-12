@@ -37,11 +37,26 @@
     .round-status.running { color: #b8860b; }
     .empty { color: var(--gray); background: #fff; border: 1px dashed #c8d0d8; border-radius: 6px; padding: 1.5em; text-align: center; }
     code { background: #eef1f4; padding: .1em .35em; border-radius: 4px; }
+    .body-diff { margin: .4em 0; padding: .6em .8em; border-radius: 5px; line-height: 1.7; white-space: pre-wrap; word-break: break-word; }
+    .body-diff.old { background: #fff4f4; border: 1px solid #f1c2c8; }
+    .body-diff.new { background: #eefaf1; border: 1px solid #b7dfc2; }
+    .diff-label { font-weight: bold; margin-right: .5em; }
+    .diff-label.old { color: var(--red); }
+    .diff-label.new { color: var(--green); }
+    .change-meta { color: var(--gray); font-size: .9em; line-height: 1.6; }
+    .change-meta a { color: var(--blue); }
+    .badge.pending { background: #b8860b; }
+    .badge.done { background: var(--green); }
+    form.ack { margin-top: .4em; }
+    form.ack button { padding: .3em 1em; background: #fff; color: var(--blue); border: 1px solid var(--blue); border-radius: 5px; cursor: pointer; }
+    form.ack button:hover { background: var(--blue); color: #fff; }
+    .change-row.acknowledged td { background: #f7f8f9; }
+    .change-row.acknowledged .body-diff { opacity: .75; }
   </style>
 </head>
 <body>
   <h1>截标时间核对工具</h1>
-  <p class="subtitle">输入与示例公告站同结构的列表网址，抓取同源分页与详情页，按项目串起公告链，核对真实截标时间。</p>
+  <p class="subtitle">输入与示例公告站同结构的列表网址，抓取同源分页与详情页，按项目串起公告链，核对真实截标时间；并核查公告站未另发更正时对原公告正文的改动。</p>
 
   <form class="scrape" method="post" action="/scrape">
     <input type="text" name="start_url" value="{{ default_start_url }}" placeholder="http://sample-site:8000/list.html" required>
@@ -49,12 +64,12 @@
   </form>
 
   {% if msg %}
-  <div class="banner {{ 'err' if last_round and last_round['status'] == 'failed' else 'ok' }}">{{ msg }}</div>
+  <div class="banner {{ 'err' if msg_kind == 'err' or (msg_kind == '' and last_round and last_round['status'] == 'failed') else 'ok' }}">{{ msg }}</div>
   {% endif %}
 
   {% if last_round and last_round['status'] == 'failed' and not msg %}
   <div class="banner err">
-    第 {{ last_round['id'] }} 轮抓取失败：{{ last_round['error_url'] }}（{{ last_round['error_message'] }}）。以下仍为上一轮成功结果。
+    第 {{ last_round['id'] }} 轮抓取失败：{{ last_round['error_url'] }}（{{ last_round['error_message'] }}）。以下仍为上一轮成功结果，待核对变更记录保持不变。
   </div>
   {% endif %}
 
@@ -89,6 +104,51 @@
   </table>
   {% else %}
   <div class="empty">尚无成功采集结果。请在上方输入列表网址并点击“开始抓取”。</div>
+  {% endif %}
+
+  <h2>正文变更核查{% if pending_changes %}（待核对 {{ pending_changes }} 条）{% endif %}</h2>
+  <p class="muted">按公告编号比较同一目录相邻两次成功轮次的 <code>.notice-body</code> 正文（已合并空白）。
+  公告站未另发更正时若原公告正文被改动，会在此列出旧文、新文、比较的两个轮次与来源链接。新出现的公告不算变更；
+  待核对记录在后续正文不变的抓取中继续保留；点击“已核对”只确认这一条，日后再改会生成新记录。</p>
+  {% if body_changes %}
+  <table>
+    <thead>
+      <tr><th>公告编号 / 项目</th><th>正文变化（旧文 → 新文）</th><th>轮次</th><th>状态 / 操作</th></tr>
+    </thead>
+    <tbody>
+      {% for c in body_changes %}
+      <tr class="change-row {{ 'acknowledged' if c['acknowledged_at'] else '' }}">
+        <td>
+          <strong>{{ c['notice_no'] }}</strong><br>
+          <span class="muted">{{ c['project_no'] }}{% if c['title'] %} · {{ c['title'] }}{% endif %}</span>
+        </td>
+        <td>
+          <div class="body-diff old"><span class="diff-label old">旧文</span>{{ c['old_body'] or '（空）' }}</div>
+          <div class="body-diff new"><span class="diff-label new">新文</span>{{ c['new_body'] or '（空）' }}</div>
+        </td>
+        <td class="change-meta">
+          旧：第 {{ c['old_round_id'] }} 轮{% if c['old_round_time'] %}（{{ c['old_round_time'] }}）{% endif %}<br>
+          <a href="{{ c['old_url']|public_url }}" target="_blank" rel="noopener">旧文来源</a><br>
+          新：第 {{ c['new_round_id'] }} 轮{% if c['new_round_time'] %}（{{ c['new_round_time'] }}）{% endif %}<br>
+          <a href="{{ c['new_url']|public_url }}" target="_blank" rel="noopener">新文来源</a>
+        </td>
+        <td>
+          {% if c['acknowledged_at'] %}
+          <span class="badge done">已核对</span><br>
+          <span class="muted">{{ c['acknowledged_at'] }}</span>
+          {% else %}
+          <span class="badge pending">待核对</span>
+          <form class="ack" method="post" action="/changes/{{ c['id'] }}/ack">
+            <button type="submit">已核对</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <div class="empty">尚未发现正文变更。</div>
   {% endif %}
 
   <h2>采集轮次</h2>
